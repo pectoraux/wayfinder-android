@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Wayfinder</string>
+    <string name="login_title">Sign in</string>
+    <string name="login_email_label">Email</string>
+    <string name="login_password_label">Password</string>
+    <string name="login_button">Sign in</string>
+    <string name="login_hint_demo">Demo credentials are pre-filled: demo-user@wayfinder.app / wayfinder</string>
+    <string name="strategy_title">Strategy</string>
+    <string name="strategy_best_trajectory">Best trajectory</string>
+    <string name="strategy_blockers">Blockers</string>
+    <string name="strategy_actions">Actions</string>
+    <string name="strategy_explanation">Explanation</string>
+    <string name="strategy_history">History</string>
+    <string name="explanation_key_factors">Key factors</string>
+    <string name="explanation_assumptions">Assumptions</string>
+    <string name="outcome_title">Outcomes</string>
+    <string name="outcome_expected">Expected</string>
+    <string name="outcome_observed">Observed</string>
+    <string name="outcome_evaluation">Evaluation</string>
+    <string name="outcome_expected_empty">No expected outcomes provided by the server.</string>
+    <string name="outcome_observed_empty">No observations recorded yet.</string>
+    <string name="outcome_record_observation">Record an observation</string>
+    <string name="outcome_observed_value">Observed value</string>
+    <string name="outcome_record">Record</string>
+    <string name="outcome_summary">Summary</string>
+    <string name="summary_expected">Expected</string>
+    <string name="summary_observed">Observed</string>
+    <string name="summary_evaluation">Evaluation</string>
+    <string name="summary_achieved">Achieved</string>
+    <string name="summary_partial">Partial</string>
+    <string name="summary_missed">Missed</string>
+    <string name="summary_pending">Pending</string>
+    <string name="action_retry">Retry</string>
+    <string name="action_logout">Sign out</string>
+    <string name="action_back">Back</string>
+    <string name="error_generic">Something went wrong. Please try again.</string>
+</resources>

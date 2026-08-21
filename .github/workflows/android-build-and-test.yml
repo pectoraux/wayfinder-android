@@ -1,0 +1,298 @@
+name: Android Build & Test
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  # Pinned SDK versions — match app/build.gradle.kts (compileSdk/targetSdk 34).
+  COMPILE_SDK: "34"
+  BUILD_TOOLS: "34.0.0"
+  AVD_NAME: "test_avd"
+  AVD_API: "34"
+  AVD_ABI: "x86_64"
+
+jobs:
+  build-and-test:
+    name: Build, unit test, and instrumented test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK (compileSdk 34, build-tools 34.0.0)
+        uses: android-actions/setup-android@v3
+        with:
+          packages: |
+            tools
+            platform-tools
+            build-tools;34.0.0
+            platforms;android-34
+            emulator
+            system-images;android-34;google_apis;x86_64
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      # ------------------------------------------------------------------
+      # Verify the Android SDK is actually present where we expect it.
+      # ------------------------------------------------------------------
+      - name: Verify Android SDK (ANDROID_HOME, platforms/android-34, build-tools/34.0.0, adb, emulator)
+        run: |
+          set -e
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          if [ -z "$ANDROID_HOME" ]; then
+            echo "::error::ANDROID_HOME is not set"
+            exit 1
+          fi
+
+          for p in \
+            "$ANDROID_HOME/platforms/android-${COMPILE_SDK}" \
+            "$ANDROID_HOME/build-tools/${BUILD_TOOLS}" \
+            "$ANDROID_HOME/platform-tools/adb" \
+            "$ANDROID_HOME/emulator/emulator" \
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"; do
+            if [ ! -e "$p" ]; then
+              echo "::error::Expected SDK path not found: $p"
+              exit 1
+            fi
+            echo "OK: $p"
+          done
+
+      # ------------------------------------------------------------------
+      # Print the versions of every tool the build depends on.
+      # ------------------------------------------------------------------
+      - name: Print tool versions
+        run: |
+          set -x
+          sdkmanager --version
+          adb version
+          java -version
+          ./gradlew --version
+          { set +x; } 2>/dev/null
+
+      # ------------------------------------------------------------------
+      # Build the debug APK + the androidTest APK.
+      # ------------------------------------------------------------------
+      - name: Assemble debug APK and androidTest APK
+        run: ./gradlew assembleDebug assembleDebugAndroidTest --stacktrace
+
+      # ------------------------------------------------------------------
+      # JVM unit tests.
+      # ------------------------------------------------------------------
+      - name: Run JVM unit tests
+        run: ./gradlew test --stacktrace
+
+      - name: Fail if zero unit tests ran
+        run: |
+          set -e
+          RESULTS_DIR="app/build/test-results/testDebugUnitTest"
+          if [ ! -d "$RESULTS_DIR" ]; then
+            echo "::error::No unit test results directory found at $RESULTS_DIR"
+            exit 1
+          fi
+          TEST_FILES=$(find "$RESULTS_DIR" -name '*.xml' | wc -l)
+          echo "Found $TEST_FILES unit-test XML files"
+          if [ "$TEST_FILES" -eq 0 ]; then
+            echo "::error::Zero unit test result files were produced. Failing."
+            exit 1
+          fi
+          TESTS=$(find "$RESULTS_DIR" -name '*.xml' -exec grep -h 'testsuite ' {} \; \
+                  | sed -nE 's/.*tests="([0-9]+)".*/\1/p' \
+                  | awk '{s+=$1} END {print s+0}')
+          echo "Total unit tests executed: $TESTS"
+          if [ "$TESTS" -eq 0 ]; then
+            echo "::error::Zero unit tests ran (tests_executed == 0). Failing."
+            exit 1
+          fi
+
+      # ------------------------------------------------------------------
+      # Create AVD named "test_avd" (API 34, x86_64) and start emulator.
+      # ------------------------------------------------------------------
+      - name: Create AVD (test_avd)
+        run: |
+          set -e
+          echo "Creating AVD '${AVD_NAME}' (API ${AVD_API}, ${AVD_ABI})..."
+          echo "no" | avdmanager create avd \
+            -n "$AVD_NAME" \
+            -k "system-images;android-${AVD_API};google_apis;${AVD_ABI}" \
+            -f || true
+          # Verify the AVD was created.
+          avdmanager list avd | grep "$AVD_NAME"
+
+      - name: Start emulator in background
+        run: |
+          mkdir -p /tmp/avd-logs
+          nohup $ANDROID_HOME/emulator/emulator \
+            -avd "$AVD_NAME" \
+            -no-window \
+            -no-audio \
+            -no-boot-anim \
+            -no-snapshot \
+            -gpu swiftshader_indirect \
+            -port 5554 \
+            > /tmp/avd-logs/emulator.log 2>&1 &
+          echo "Emulator launched (pid $!)."
+
+      - name: adb wait-for-device
+        run: |
+          echo "Waiting for adb to see the emulator..."
+          adb wait-for-device
+          echo "adb sees the device."
+
+      - name: Wait for sys.boot_completed == 1 (timeout 300s)
+        run: |
+          set -e
+          TIMEOUT=300
+          ELAPSED=0
+          while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
+            BOOT_COMPLETE=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            if [ "$BOOT_COMPLETE" = "1" ]; then
+              echo "Boot completed after ~${ELAPSED}s."
+              exit 0
+            fi
+            sleep 2
+            ELAPSED=$((ELAPSED + 2))
+          done
+          echo "::error::Emulator did not finish booting within ${TIMEOUT}s (sys.boot_completed != 1)."
+          echo "----- emulator.log (tail) -----"
+          tail -200 /tmp/avd-logs/emulator.log || true
+          echo "----- logcat (tail) -----"
+          adb logcat -d 2>/dev/null | tail -200 || true
+          exit 1
+
+      - name: Print emulator build properties
+        run: |
+          echo "ro.build.version.sdk = $(adb shell getprop ro.build.version.sdk | tr -d '\r')"
+          echo "ro.product.cpu.abi  = $(adb shell getprop ro.product.cpu.abi | tr -d '\r')"
+
+      # ------------------------------------------------------------------
+      # Disable animations for stable instrumentation test runs.
+      # ------------------------------------------------------------------
+      - name: Disable animations
+        run: |
+          adb shell settings put global window_animation_scale 0 || true
+          adb shell settings put global transition_animation_scale 0 || true
+          adb shell settings put global animator_duration_scale 0 || true
+
+      # ------------------------------------------------------------------
+      # Instrumentation tests.
+      # ------------------------------------------------------------------
+      - name: Run connectedAndroidTest
+        run: ./gradlew connectedAndroidTest --stacktrace
+
+      - name: Fail if zero instrumentation tests ran
+        run: |
+          set -e
+          INSTR_DIR="app/build/outputs/androidTest-results/connected"
+          if [ ! -d "$INSTR_DIR" ]; then
+            echo "::error::No instrumentation results directory at $INSTR_DIR"
+            adb logcat -d > /tmp/adb-logcat.txt || true
+            exit 1
+          fi
+          INSTR_FILES=$(find "$INSTR_DIR" -name '*.xml' | wc -l)
+          echo "Found $INSTR_FILES instrumentation XML files"
+          if [ "$INSTR_FILES" -eq 0 ]; then
+            echo "::error::Zero instrumentation test result files. Failing."
+            exit 1
+          fi
+          INSTR_TESTS=$(find "$INSTR_DIR" -name '*.xml' -exec grep -h 'testsuite ' {} \; \
+                        | sed -nE 's/.*tests="([0-9]+)".*/\1/p' \
+                        | awk '{s+=$1} END {print s+0}')
+          echo "Total instrumentation tests executed: $INSTR_TESTS"
+          if [ "$INSTR_TESTS" -eq 0 ]; then
+            echo "::error::Zero instrumentation tests ran (tests_executed == 0). Failing."
+            exit 1
+          fi
+
+      - name: Dump logcat
+        if: always()
+        run: adb logcat -d > /tmp/adb-logcat.txt 2>/dev/null || true
+
+      # ------------------------------------------------------------------
+      # Artifacts: APKs, JUnit XML, logcat, Gradle reports.
+      # ------------------------------------------------------------------
+      - name: Upload debug APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wayfinder-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+
+      - name: Upload androidTest APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wayfinder-androidTest-apk
+          path: app/build/outputs/apk/androidTest/debug/*.apk
+          if-no-files-found: warn
+
+      - name: Upload unit test JUnit XML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-junit-xml
+          path: app/build/test-results/testDebugUnitTest/**/*.xml
+          if-no-files-found: warn
+
+      - name: Upload instrumentation test JUnit XML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: instrumentation-test-junit-xml
+          path: app/build/outputs/androidTest-results/connected/**/*.xml
+          if-no-files-found: warn
+
+      - name: Upload logcat
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logcat
+          path: /tmp/adb-logcat.txt
+          if-no-files-found: warn
+
+      - name: Upload emulator log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-log
+          path: /tmp/avd-logs/emulator.log
+          if-no-files-found: warn
+
+      - name: Upload Gradle unit-test reports (HTML)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-unit-test-reports
+          path: app/build/reports/tests/testDebugUnitTest/**
+          if-no-files-found: warn
+
+      - name: Upload Gradle instrumentation reports (HTML)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-instrumentation-reports
+          path: app/build/reports/androidTests/connected/**
+          if-no-files-found: warn
