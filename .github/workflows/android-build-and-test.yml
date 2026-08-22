@@ -157,10 +157,13 @@ jobs:
           # Verify the AVD was created.
           avdmanager list avd | grep "$AVD_NAME"
 
-      - name: Start emulator in background
+      - name: Start emulator and wait for boot (timeout 600s)
         if: success()
         run: |
           mkdir -p /tmp/avd-logs
+          # Start adb server first
+          adb start-server
+          # Launch emulator
           nohup $ANDROID_HOME/emulator/emulator \
             -avd "$AVD_NAME" \
             -no-window \
@@ -168,38 +171,32 @@ jobs:
             -no-boot-anim \
             -no-snapshot \
             -gpu swiftshader_indirect \
+            -no-snapshot-save \
             -port 5554 \
             > /tmp/avd-logs/emulator.log 2>&1 &
           echo "Emulator launched (pid $!)."
-
-      - name: adb wait-for-device (timeout 120s)
-        if: success()
-        run: |
-          echo "Waiting for adb to see the emulator..."
-          timeout 120 adb wait-for-device shell getprop sys.boot_completed
-          echo "adb sees the device."
-        continue-on-error: false
-
-      - name: Wait for sys.boot_completed == 1 (timeout 300s)
-        if: success()
-        run: |
-          set -e
-          TIMEOUT=300
+          sleep 5
+          # Wait for device + boot completion
+          echo "Waiting for emulator to boot..."
+          adb wait-for-device
+          echo "Device detected. Waiting for boot completion..."
+          TIMEOUT=600
           ELAPSED=0
           while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
             BOOT_COMPLETE=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
             if [ "$BOOT_COMPLETE" = "1" ]; then
-              echo "Boot completed after ~${ELAPSED}s."
+              echo "Boot completed after ${ELAPSED}s."
               exit 0
             fi
-            sleep 2
-            ELAPSED=$((ELAPSED + 2))
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+            echo "Waiting... (${ELAPSED}s/${TIMEOUT}s)"
           done
-          echo "::error::Emulator did not finish booting within ${TIMEOUT}s (sys.boot_completed != 1)."
-          echo "----- emulator.log (tail) -----"
-          tail -200 /tmp/avd-logs/emulator.log || true
-          echo "----- logcat (tail) -----"
-          adb logcat -d 2>/dev/null | tail -200 || true
+          echo "::error::Emulator did not finish booting within ${TIMEOUT}s."
+          echo "=== emulator.log (tail) ==="
+          tail -50 /tmp/avd-logs/emulator.log || true
+          echo "=== adb devices ==="
+          adb devices
           exit 1
 
       - name: Print emulator build properties
