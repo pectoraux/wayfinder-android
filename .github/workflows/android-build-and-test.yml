@@ -176,9 +176,9 @@ jobs:
             > /tmp/avd-logs/emulator.log 2>&1 &
           echo "Emulator launched (pid $!)."
           sleep 5
-          # Wait for device + boot completion
+          # Wait for device + boot completion (with timeout on adb wait-for-device)
           echo "Waiting for emulator to boot..."
-          adb wait-for-device
+          timeout 300 adb wait-for-device
           echo "Device detected. Waiting for boot completion..."
           TIMEOUT=600
           ELAPSED=0
