@@ -96,17 +96,30 @@ jobs:
 
       # ------------------------------------------------------------------
       # Build the debug APK + the androidTest APK.
+      # Capture output to a file so we can upload it even on failure.
       # ------------------------------------------------------------------
       - name: Assemble debug APK and androidTest APK
-        run: ./gradlew assembleDebug assembleDebugAndroidTest --stacktrace
+        run: |
+          ./gradlew assembleDebug assembleDebugAndroidTest --stacktrace 2>&1 | tee build-output.log
+        id: build
+
+      - name: Upload build log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output-log
+          path: build-output.log
+          retention-days: 30
 
       # ------------------------------------------------------------------
       # JVM unit tests.
       # ------------------------------------------------------------------
       - name: Run JVM unit tests
+        if: success()
         run: ./gradlew test --stacktrace
 
       - name: Fail if zero unit tests ran
+        if: success()
         run: |
           set -e
           RESULTS_DIR="app/build/test-results/testDebugUnitTest"
@@ -133,17 +146,19 @@ jobs:
       # Create AVD named "test_avd" (API 34, x86_64) and start emulator.
       # ------------------------------------------------------------------
       - name: Create AVD (test_avd)
+        if: success()
         run: |
           set -e
           echo "Creating AVD '${AVD_NAME}' (API ${AVD_API}, ${AVD_ABI})..."
           echo "no" | avdmanager create avd \
             -n "$AVD_NAME" \
             -k "system-images;android-${AVD_API};google_apis;${AVD_ABI}" \
-            -f || true
+            -f
           # Verify the AVD was created.
           avdmanager list avd | grep "$AVD_NAME"
 
       - name: Start emulator in background
+        if: success()
         run: |
           mkdir -p /tmp/avd-logs
           nohup $ANDROID_HOME/emulator/emulator \
@@ -158,12 +173,14 @@ jobs:
           echo "Emulator launched (pid $!)."
 
       - name: adb wait-for-device
+        if: success()
         run: |
           echo "Waiting for adb to see the emulator..."
           adb wait-for-device
           echo "adb sees the device."
 
       - name: Wait for sys.boot_completed == 1 (timeout 300s)
+        if: success()
         run: |
           set -e
           TIMEOUT=300
@@ -185,6 +202,7 @@ jobs:
           exit 1
 
       - name: Print emulator build properties
+        if: success()
         run: |
           echo "ro.build.version.sdk = $(adb shell getprop ro.build.version.sdk | tr -d '\r')"
           echo "ro.product.cpu.abi  = $(adb shell getprop ro.product.cpu.abi | tr -d '\r')"
@@ -193,6 +211,7 @@ jobs:
       # Disable animations for stable instrumentation test runs.
       # ------------------------------------------------------------------
       - name: Disable animations
+        if: success()
         run: |
           adb shell settings put global window_animation_scale 0 || true
           adb shell settings put global transition_animation_scale 0 || true
@@ -202,9 +221,11 @@ jobs:
       # Instrumentation tests.
       # ------------------------------------------------------------------
       - name: Run connectedAndroidTest
+        if: success()
         run: ./gradlew connectedAndroidTest --stacktrace
 
       - name: Fail if zero instrumentation tests ran
+        if: success()
         run: |
           set -e
           INSTR_DIR="app/build/outputs/androidTest-results/connected"
