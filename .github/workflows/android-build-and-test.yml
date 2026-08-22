@@ -172,12 +172,13 @@ jobs:
             > /tmp/avd-logs/emulator.log 2>&1 &
           echo "Emulator launched (pid $!)."
 
-      - name: adb wait-for-device
+      - name: adb wait-for-device (timeout 120s)
         if: success()
         run: |
           echo "Waiting for adb to see the emulator..."
-          adb wait-for-device
+          timeout 120 adb wait-for-device shell getprop sys.boot_completed
           echo "adb sees the device."
+        continue-on-error: false
 
       - name: Wait for sys.boot_completed == 1 (timeout 300s)
         if: success()
