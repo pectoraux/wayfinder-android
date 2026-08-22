@@ -40,9 +40,9 @@ android {
         buildConfig = true
     }
 
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.15"
-    }
+    // Note: With Kotlin 2.0+ and the org.jetbrains.kotlin.plugin.compose Gradle
+    // plugin, the Compose compiler is configured automatically. Do NOT set
+    // composeOptions.kotlinCompilerExtensionVersion — it conflicts with the plugin.
 
     packaging {
         resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
